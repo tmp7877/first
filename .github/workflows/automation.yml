@@ -1,0 +1,90 @@
+name: automation
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      start_time:
+        required: false
+        type: string
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      matrix:
+        instance: [1,2,3,4,5,6,7,8,9,10,
+                   11,12,13,14,15,16,17,18,19,20]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Chromium dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
+            libgbm1 libgtk-3-0 libasound2t64
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install packages
+        run: npm install puppeteer express
+
+      - name: Run script
+        run: node index.js
+
+  restart:
+    needs: worker
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Determine start time
+        id: start
+        run: |
+          if [ -z "${{ github.event.inputs.start_time }}" ]; then
+            echo "start=$(date +%s)" >> $GITHUB_OUTPUT
+          else
+            echo "start=${{ github.event.inputs.start_time }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check runtime
+        id: runtime
+        run: |
+          START=${{ steps.start.outputs.start }}
+          NOW=$(date +%s)
+          HOURS=$(( (NOW - START) / 3600 ))
+          echo "hours=$HOURS" >> $GITHUB_OUTPUT
+
+      - name: Stop if limit reached
+        if: steps.runtime.outputs.hours >= 12
+        run: echo "Reached time limit, stopping."
+
+      - name: Trigger new run
+        if: steps.runtime.outputs.hours < 12
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "automation.yml",
+              ref: context.ref.replace("refs/heads/", ""),
+              inputs: {
+                start_time: "${{ steps.start.outputs.start }}"
+              }
+            });
